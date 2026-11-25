@@ -50,6 +50,7 @@ private val Good = Color(0xFF58D6A5)
 
 class MainActivity : ComponentActivity() {
     private var autofillEnabled by mutableStateOf(false)
+    private val vaultRecords = mutableStateListOf<JSONObject>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,10 +61,9 @@ class MainActivity : ComponentActivity() {
                 onBackground = Color.White, onSurface = Color.White, error = Color(0xFFFF8585)
             )) {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    val records = remember { mutableStateListOf<JSONObject>() }
                     AutoPassRoot(
                         enabled = autofillEnabled,
-                        records = records,
+                        records = vaultRecords,
                         onEnable = ::requestAutofill,
                         onRefresh = ::refreshAutofillState,
                         onLoad = { target -> target.clear(); target.addAll(EncryptedVault(this).all()) },
@@ -94,6 +94,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshAutofillState()
+        runCatching {
+            vaultRecords.clear()
+            vaultRecords.addAll(EncryptedVault(this).all())
+        }
     }
 
     private fun refreshAutofillState() {
