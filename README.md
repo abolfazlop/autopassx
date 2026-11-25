@@ -1,20 +1,23 @@
 # AutoPass X
 
-Android password manager for POCO X7 Pro / HyperOS 3 / Android 16.
+AutoPass X is an on-device password vault and Android Autofill provider, with a separate modern LibXposed API 102 module entry.
 
-## Design
-- Android Autofill Service is the supported system integration for suggesting saved accounts.
-- Local credential records are encrypted with AES-GCM using an Android Keystore key.
-- A libxposed API 102 bridge is provided as an opt-in extension point for app-specific success detection; no global keystroke or password-field harvesting is implemented.
-- Android's public Autofill save flow may show a system confirmation. Universal silent detection of successful login is not available to third-party apps.
+## Current implementation
+- Jetpack Compose dark interface with animated page transitions.
+- Encrypted local records using AES-GCM and Android Keystore.
+- Multiple credentials per Android package.
+- Android Autofill datasets for saved credentials.
+- Autofill provider selection is checked from the system setting; the setup intent is not launched again once AutoPass X is selected.
+- Modern LibXposed entry metadata under META-INF/xposed targeting API 102.
+
+## Important limitations
+- The LSPosed entry currently verifies module/process loading only. It does not hook login flows or capture passwords.
+- Android Autofill saving follows the platform SaveInfo / SaveRequest contract. Android or the target app decides whether to present a save prompt; a third-party app cannot universally prove that every arbitrary app login succeeded.
+- The current UI is an early functional rebuild, not a security-audited password manager. Biometric app lock, encrypted export/import, account editing, password generator UI, and per-app integration hooks are not complete yet.
+- Use a test account first. Avoid storing high-value credentials in development builds.
 
 ## Build
-GitHub Actions builds the debug APK on push. Download it from the Actions run artifacts.
+Pushes to main trigger the Android debug APK workflow. The workflow artifact is named AutoPassX-debug.
 
-## Install
-1. Install the APK.
-2. Open AutoPass X and configure the vault.
-3. Android Settings → Passwords, passkeys & accounts → Autofill service → AutoPass X.
-4. Test using a non-critical account first.
-
-This is an early development build, not yet audited for production use.
+## Device target
+Android 8+; developed for POCO X7 Pro / Android 16 / KernelSU / LSPosed with modern LibXposed API 102.
