@@ -38,13 +38,17 @@ class EncryptedVault(context: Context) {
         prefs.edit().putString(id, Base64.encodeToString(payload, Base64.NO_WRAP)).apply()
     }
 
-    fun get(id: String): JSONObject? = try {
-        val raw = prefs.getString(id, null) ?: return null
-        val data = ByteBuffer.wrap(Base64.decode(raw, Base64.NO_WRAP))
-        val iv = ByteArray(data.int).also(data::get)
-        val encrypted = ByteArray(data.remaining()).also(data::get)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
-    } catch (_: Exception) { null }
+    fun get(id: String): JSONObject? {
+        return try {
+            val raw = prefs.getString(id, null) ?: return null
+            val data = ByteBuffer.wrap(Base64.decode(raw, Base64.NO_WRAP))
+            val ivSize = data.int
+            require(ivSize in 12..16)
+            val iv = ByteArray(ivSize).also(data::get)
+            val encrypted = ByteArray(data.remaining()).also(data::get)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
+        } catch (_: Exception) { null }
+    }
 }
