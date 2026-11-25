@@ -1,7 +1,6 @@
 package dev.autopassx.autofill
 
 import android.app.assist.AssistStructure
-import android.content.Context
 import android.service.autofill.*
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
@@ -21,18 +20,21 @@ class AutoPassAutofillService : AutofillService() {
             val pass = fields.firstOrNull { it.kind == "pass" }
             if (user == null || pass == null) { callback.onSuccess(null); return }
 
-            val record = EncryptedVault(this).get("app:$pkg")
+            val matches = EncryptedVault(this).all().filter { it.optString("package") == pkg }
             val response = FillResponse.Builder()
-            if (record != null) {
+            matches.take(8).forEach { record ->
                 val username = record.optString("username")
                 val password = record.optString("password")
-                val view = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-                    setTextViewText(android.R.id.text1, if (username.isBlank()) "Saved account" else username)
+                if (username.isNotBlank() && password.isNotBlank()) {
+                    val label = record.optString("label").ifBlank { username }
+                    val view = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+                        setTextViewText(android.R.id.text1, "$label · $username")
+                    }
+                    response.addDataset(Dataset.Builder(view)
+                        .setValue(user.id, AutofillValue.forText(username))
+                        .setValue(pass.id, AutofillValue.forText(password))
+                        .build())
                 }
-                response.addDataset(Dataset.Builder(view)
-                    .setValue(user.id, AutofillValue.forText(username))
-                    .setValue(pass.id, AutofillValue.forText(password))
-                    .build())
             }
             response.setSaveInfo(SaveInfo.Builder(
                 SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
@@ -55,11 +57,9 @@ class AutoPassAutofillService : AutofillService() {
             if (username.isBlank() || password.isBlank()) {
                 callback.onFailure("Username or password missing"); return
             }
-            val record = JSONObject()
-                .put("package", pkg)
-                .put("username", username)
-                .put("password", password)
-            EncryptedVault(this).put("app:$pkg", record)
+            val record = JSONObject().put("package", pkg).put("label", pkg)
+                .put("username", username).put("password", password)
+            EncryptedVault(this).put("app:$pkg:$username", record)
             callback.onSuccess()
         } catch (_: Exception) { callback.onFailure("Unable to save account") }
     }
@@ -69,9 +69,10 @@ class AutoPassAutofillService : AutofillService() {
     private fun scan(node: AssistStructure.ViewNode, out: MutableList<NodeField>) {
         val hints = node.autofillHints?.toList().orEmpty()
         val input = node.inputType
+        val variation = input and android.text.InputType.TYPE_MASK_VARIATION
         val password = hints.any { it.contains("password", true) } ||
-            (input and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
-            (input and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0
+            variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
         val user = hints.any { it.contains("username", true) || it.contains("email", true) } ||
             node.idEntry?.contains("user", true) == true || node.idEntry?.contains("email", true) == true
         val id = node.autofillId
