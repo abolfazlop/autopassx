@@ -122,7 +122,7 @@ private fun AutoPassRoot(
     onEnable: () -> Unit,
     onRefresh: () -> Unit,
     onLoad: (MutableList<JSONObject>) -> Unit,
-    onSave: (String, String, String, String) -> Unit,
+    onSave: (String, String, String, String, String) -> Unit,
     onDelete: (String) -> Unit,
     onCopy: (String) -> Unit
 ) {
