@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
                             EncryptedVault(this).put(
                                 "app:$pkg:$username",
                                 JSONObject().put("label", title).put("package", pkg)
-                                    .put("username", username).put("password", password)
+                                    .put("domain", "").put("username", username).put("password", password)
                             )
                         },
                         onDelete = { id -> EncryptedVault(this).delete(id) },
@@ -224,7 +224,8 @@ private fun VaultPage(
     onDelete: (String, JSONObject) -> Unit
 ) {
     val filtered = records.filter {
-        (it.optString("label") + " " + it.optString("package") + " " + it.optString("username"))
+        (it.optString("label") + " " + it.optString("package") + " " +
+            it.optString("domain") + " " + it.optString("username"))
             .contains(search, ignoreCase = true)
     }
     Column(Modifier.fillMaxSize()) {
@@ -268,8 +269,15 @@ private fun VaultPage(
                 contentPadding = PaddingValues(bottom = 20.dp, top = 2.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(filtered, key = { it.optString("package") + ":" + it.optString("username") }) { item ->
-                    val id = "app:${item.optString("package")}:${item.optString("username")}"
+                items(filtered, key = {
+                    it.optString("domain") + ":" + it.optString("package") + ":" + it.optString("username")
+                }) { item ->
+                    val domain = item.optString("domain")
+                    val id = if (domain.isNotBlank()) {
+                        "web:$domain:${item.optString("username")}"
+                    } else {
+                        "app:${item.optString("package")}:${item.optString("username")}"
+                    }
                     AccountCard(
                         item, id in reveal, { onReveal(id) },
                         { onCopy(item.optString("username")) },
@@ -301,7 +309,10 @@ private fun AccountCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(item.optString("label", "حساب"), color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(item.optString("package"), color = TextMuted, fontSize = 10.sp)
+                    Text(
+                        item.optString("domain").ifBlank { item.optString("package") },
+                        color = TextMuted, fontSize = 10.sp
+                    )
                 }
                 TextButton(onClick = onDelete) { Text("حذف", color = Color(0xFFFF8585)) }
             }
