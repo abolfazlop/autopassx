@@ -198,7 +198,6 @@ private fun AutoPassRoot(
     }
 }
 
-@Composable
 private fun normalizeWebsiteDomain(raw: String): String {
     return raw.trim().lowercase()
         .removePrefix("https://").removePrefix("http://").removePrefix("www.")
