@@ -114,12 +114,13 @@ class AutoPassAutofillService : AutofillService() {
             // onSaveRequest is never called for a first-time login.
             if (password != null) {
                 val requiredIds = arrayOf(password.id)
-                val saveInfo = SaveInfo.Builder(
-                    SaveInfo.SAVE_DATA_TYPE_PASSWORD or
-                        if (username != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0,
-                    requiredIds
-                ).apply {
+                val dataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD or
+                    (if (username != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0)
+                val saveInfo = SaveInfo.Builder(dataTypes, requiredIds).apply {
                     if (username != null) setOptionalIds(arrayOf(username.id))
+                    // Some web apps replace the login form without finishing the browser Activity.
+                    // This lets Android trigger the save flow when all login fields disappear.
+                    setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
                     setDescription("ذخیره اطلاعات ورود در AutoPass X")
                 }.build()
                 response.setSaveInfo(saveInfo)
