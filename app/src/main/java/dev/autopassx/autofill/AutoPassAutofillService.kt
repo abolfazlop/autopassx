@@ -173,19 +173,23 @@ class AutoPassAutofillService : AutofillService() {
     private fun collectFields(structure: AssistStructure): List<NodeField> {
         val result = mutableListOf<NodeField>()
         for (windowIndex in 0 until structure.windowNodeCount) {
-            scan(structure.getWindowNodeAt(windowIndex).rootViewNode, result)
+            scan(structure.getWindowNodeAt(windowIndex).rootViewNode, result, null)
         }
         return result
     }
 
-    private fun scan(node: AssistStructure.ViewNode, output: MutableList<NodeField>) {
+    private fun scan(
+        node: AssistStructure.ViewNode,
+        output: MutableList<NodeField>,
+        inheritedDomain: String?
+    ) {
         val hints = node.autofillHints?.map { it.lowercase(Locale.ROOT) }.orEmpty()
         val inputType = node.inputType
         val variation = inputType and android.text.InputType.TYPE_MASK_VARIATION
         val inputClass = inputType and android.text.InputType.TYPE_MASK_CLASS
         val entry = node.idEntry.orEmpty().lowercase(Locale.ROOT)
         val className = node.className.orEmpty()
-        val domain = normalizeDomain(node.webDomain)
+        val domain = normalizeDomain(node.webDomain) ?: inheritedDomain
 
         val isPassword = hints.any { it.contains("password") } ||
             variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD ||
@@ -225,7 +229,7 @@ class AutoPassAutofillService : AutofillService() {
         }
 
         for (index in 0 until node.childCount) {
-            scan(node.getChildAt(index), output)
+            scan(node.getChildAt(index), output, domain)
         }
     }
 
