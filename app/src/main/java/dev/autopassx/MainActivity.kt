@@ -381,7 +381,7 @@ private fun GeneratorPage(
         Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.padding(18.dp)) {
                 Text("طول رمز: ${length.toInt()} کاراکتر", color = Color.White, fontWeight = FontWeight.Bold)
-                Slider(value = length, onValueChange = onLength, valueRange = 12f..40f, steps = 27)
+                Slider(value = length, onValueChange = onLength, valueRange = 16f..40f, steps = 23)
                 Spacer(Modifier.height(10.dp))
                 Text(if (generated.isBlank()) "برای ساخت رمز دکمه را بزن" else generated,
                     color = Accent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
