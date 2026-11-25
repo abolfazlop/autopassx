@@ -44,15 +44,17 @@ class EncryptedVault(context: Context) {
 
     @Synchronized fun delete(id: String) { prefs.edit().remove(id).commit() }
 
-    private fun decrypt(raw: String?): JSONObject? = try {
-        if (raw == null) return null
-        val data = ByteBuffer.wrap(Base64.decode(raw, Base64.NO_WRAP))
-        val ivSize = data.int
-        require(ivSize in 12..16 && data.remaining() > ivSize)
-        val iv = ByteArray(ivSize).also(data::get)
-        val encrypted = ByteArray(data.remaining()).also(data::get)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
-    } catch (_: Exception) { null }
+    private fun decrypt(raw: String?): JSONObject? {
+        return try {
+            if (raw == null) return null
+            val data = ByteBuffer.wrap(Base64.decode(raw, Base64.NO_WRAP))
+            val ivSize = data.int
+            require(ivSize in 12..16 && data.remaining() > ivSize)
+            val iv = ByteArray(ivSize).also(data::get)
+            val encrypted = ByteArray(data.remaining()).also(data::get)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
+        } catch (_: Exception) { null }
+    }
 }
