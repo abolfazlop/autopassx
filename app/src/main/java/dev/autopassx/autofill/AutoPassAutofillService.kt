@@ -1,6 +1,7 @@
 package dev.autopassx.autofill
 
 import android.app.assist.AssistStructure
+import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
 import android.service.autofill.FillCallback
@@ -9,6 +10,7 @@ import android.service.autofill.FillResponse
 import android.service.autofill.SaveCallback
 import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
+import android.text.InputType
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
@@ -16,89 +18,114 @@ import dev.autopassx.security.EncryptedVault
 import org.json.JSONObject
 import java.util.Locale
 
+/**
+ * Android Autofill integration.
+ *
+ * Important: Android only sends a SaveRequest when a prior FillResponse contains SaveInfo,
+ * the required fields changed, and the user accepts the system save prompt. The service must
+ * therefore return a response even when there is no matching saved login yet.
+ */
 class AutoPassAutofillService : AutofillService() {
 
     override fun onFillRequest(
         request: FillRequest,
-        cancellationSignal: android.os.CancellationSignal,
+        cancellationSignal: CancellationSignal,
         callback: FillCallback
     ) {
+        if (cancellationSignal.isCanceled) {
+            callback.onSuccess(null)
+            return
+        }
+
         try {
-            if (cancellationSignal.isCanceled) {
-                callback.onSuccess(null)
-                return
-            }
-
             val structure = request.fillContexts.lastOrNull()?.structure
-            if (structure == null) {
-                callback.onSuccess(null)
-                return
-            }
-
-            val packageName = structure.activityComponent?.packageName
-            if (packageName.isNullOrBlank() || packageName == this.packageName) {
+            val packageName = structure?.activityComponent?.packageName
+            if (structure == null || packageName.isNullOrBlank() || packageName == this.packageName) {
                 callback.onSuccess(null)
                 return
             }
 
             val fields = collectFields(structure)
-            val passwordField = fields.firstOrNull { it.kind == FieldKind.PASSWORD }
-            if (passwordField == null) {
+            val password = fields.firstOrNull { it.kind == FieldKind.PASSWORD }
+            val username = fields.firstOrNull { it.kind == FieldKind.USERNAME }
+                ?: fields.firstOrNull {
+                    it.kind == FieldKind.OTHER_TEXT &&
+                        (password == null || fields.indexOf(it) < fields.indexOf(password))
+                }
+
+            // Do not stop just because the vault has no match. SaveInfo is what enables
+            // Android to ask the user whether the newly entered credentials should be saved.
+            if (password == null && username == null) {
                 callback.onSuccess(null)
                 return
             }
 
-            // Web credentials are scoped to the actual web domain, not the browser app.
-            val domain = passwordField.domain
-                ?: fields.firstOrNull { it.kind == FieldKind.USERNAME }?.domain
+            val domain = password?.domain ?: username?.domain
+                ?: fields.firstNotNullOfOrNull { it.domain }
 
-            val records = EncryptedVault(this).all().filter { record ->
-                val savedDomain = normalizeDomain(record.optString("domain"))
-                if (!domain.isNullOrBlank()) {
-                    savedDomain == domain
-                } else {
-                    savedDomain.isNullOrBlank() && record.optString("package") == packageName
-                }
-            }
-
-            val usernameField = fields.firstOrNull { it.kind == FieldKind.USERNAME }
-                ?: fields.firstOrNull {
-                    it.kind == FieldKind.OTHER_TEXT &&
-                        fields.indexOf(it) < fields.indexOf(passwordField)
-                }
-
-            val response = FillResponse.Builder()
-            if (usernameField != null) {
-                records.take(MAX_SUGGESTIONS).forEach { record ->
-                    val username = record.optString("username")
-                    val password = record.optString("password")
-                    if (username.isNotBlank() && password.isNotBlank()) {
-                        val label = record.optString("label").ifBlank { username }
-                        val presentation = RemoteViews(
-                            this.packageName,
-                            android.R.layout.simple_list_item_1
-                        ).apply {
-                            setTextViewText(android.R.id.text1, "$label · $username")
-                        }
-                        response.addDataset(
-                            Dataset.Builder(presentation)
-                                .setValue(usernameField.id, AutofillValue.forText(username))
-                                .setValue(passwordField.id, AutofillValue.forText(password))
-                                .build()
-                        )
+            val records = EncryptedVault(this).all()
+                .filter { record ->
+                    val savedDomain = normalizeDomain(record.optString("domain"))
+                    if (!domain.isNullOrBlank()) {
+                        savedDomain == domain
+                    } else {
+                        // Never offer a browser app's package-scoped credentials to every
+                        // website. Package matching is only safe for native-app entries.
+                        savedDomain.isNullOrBlank() &&
+                            record.optString("package") == packageName
                     }
                 }
+                .take(MAX_SUGGESTIONS)
 
-                response.setSaveInfo(
-                    SaveInfo.Builder(
-                        SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD,
-                        arrayOf(usernameField.id, passwordField.id)
-                    ).build()
-                )
-                callback.onSuccess(response.build())
-            } else {
-                callback.onSuccess(null)
+            val response = FillResponse.Builder()
+            records.forEach { record ->
+                val savedPassword = record.optString("password")
+                val savedUsername = record.optString("username")
+                if (savedPassword.isBlank() && savedUsername.isBlank()) return@forEach
+
+                val label = record.optString("label").ifBlank {
+                    savedUsername.ifBlank { domain ?: packageName }
+                }
+                val presentation = RemoteViews(
+                    this.packageName,
+                    android.R.layout.simple_list_item_1
+                ).apply {
+                    setTextViewText(
+                        android.R.id.text1,
+                        if (savedUsername.isBlank()) label else "$label · $savedUsername"
+                    )
+                }
+                val dataset = Dataset.Builder(presentation).apply {
+                    username?.let { field ->
+                        if (savedUsername.isNotBlank()) {
+                            setValue(field.id, AutofillValue.forText(savedUsername))
+                        }
+                    }
+                    password?.let { field ->
+                        if (savedPassword.isNotBlank()) {
+                            setValue(field.id, AutofillValue.forText(savedPassword))
+                        }
+                    }
+                }.build()
+                response.addDataset(dataset)
             }
+
+            // SaveInfo is deliberately attached even when records is empty. Without it,
+            // onSaveRequest is never called for a first-time login.
+            if (password != null) {
+                val requiredIds = arrayOf(password.id)
+                val saveInfo = SaveInfo.Builder(
+                    SaveInfo.SAVE_DATA_TYPE_PASSWORD or
+                        if (username != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0,
+                    requiredIds
+                ).apply {
+                    if (username != null) setOptionalIds(arrayOf(username.id))
+                    setDescription("ذخیره اطلاعات ورود در AutoPass X")
+                }.build()
+                response.setSaveInfo(saveInfo)
+            }
+
+            callback.onSuccess(response.build())
         } catch (_: Exception) {
             callback.onSuccess(null)
         }
@@ -107,13 +134,8 @@ class AutoPassAutofillService : AutofillService() {
     override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
         try {
             val structure = request.fillContexts.lastOrNull()?.structure
-            if (structure == null) {
-                callback.onFailure("No form data was provided")
-                return
-            }
-
-            val packageName = structure.activityComponent?.packageName
-            if (packageName.isNullOrBlank() || packageName == this.packageName) {
+            val packageName = structure?.activityComponent?.packageName
+            if (structure == null || packageName.isNullOrBlank() || packageName == this.packageName) {
                 callback.onFailure("Unable to identify the source application")
                 return
             }
@@ -122,45 +144,45 @@ class AutoPassAutofillService : AutofillService() {
             val passwordField = fields.firstOrNull {
                 it.kind == FieldKind.PASSWORD && it.value.isNotBlank()
             }
+            if (passwordField == null) {
+                callback.onFailure("Password field was not found")
+                return
+            }
+
             val usernameField = fields.firstOrNull {
                 it.kind == FieldKind.USERNAME && it.value.isNotBlank()
             } ?: fields.firstOrNull {
                 it.kind == FieldKind.OTHER_TEXT &&
                     it.value.isNotBlank() &&
-                    (passwordField == null || fields.indexOf(it) < fields.indexOf(passwordField))
+                    fields.indexOf(it) < fields.indexOf(passwordField)
             }
 
-            val username = usernameField?.value?.trim().orEmpty()
-            val password = passwordField?.value.orEmpty()
-            if (username.isBlank() || password.isBlank()) {
-                callback.onFailure("Username or password could not be read")
+            val usernameValue = usernameField?.value?.trim().orEmpty()
+            if (usernameValue.isBlank()) {
+                callback.onFailure("Username or email was not found. Add this login manually.")
                 return
             }
 
-            val domain = normalizeDomain(
-                passwordField?.domain ?: usernameField?.domain
-            )
-            val appLabel = if (domain != null) {
-                domain
-            } else {
-                runCatching {
-                    packageManager.getApplicationLabel(
-                        packageManager.getApplicationInfo(packageName, 0)
-                    ).toString()
-                }.getOrDefault(packageName)
-            }
+            val domain = passwordField.domain
+                ?: usernameField?.domain
+                ?: fields.firstNotNullOfOrNull { it.domain }
+            val appLabel = domain ?: runCatching {
+                packageManager.getApplicationLabel(
+                    packageManager.getApplicationInfo(packageName, 0)
+                ).toString()
+            }.getOrDefault(packageName)
 
             val record = JSONObject()
                 .put("package", packageName)
                 .put("domain", domain.orEmpty())
                 .put("label", appLabel)
-                .put("username", username)
-                .put("password", password)
+                .put("username", usernameValue)
+                .put("password", passwordField.value)
 
             val recordId = if (domain != null) {
-                "web:$domain:$username"
+                "web:$domain:$usernameValue"
             } else {
-                "app:$packageName:$username"
+                "app:$packageName:$usernameValue"
             }
 
             EncryptedVault(this).put(recordId, record)
@@ -185,30 +207,34 @@ class AutoPassAutofillService : AutofillService() {
     ) {
         val hints = node.autofillHints?.map { it.lowercase(Locale.ROOT) }.orEmpty()
         val inputType = node.inputType
-        val variation = inputType and android.text.InputType.TYPE_MASK_VARIATION
-        val inputClass = inputType and android.text.InputType.TYPE_MASK_CLASS
+        val variation = inputType and InputType.TYPE_MASK_VARIATION
+        val inputClass = inputType and InputType.TYPE_MASK_CLASS
         val entry = node.idEntry.orEmpty().lowercase(Locale.ROOT)
+        val resourceName = node.idPackage?.let { "$it:$entry" }.orEmpty()
         val className = node.className.orEmpty()
         val domain = normalizeDomain(node.webDomain) ?: inheritedDomain
 
-        val isPassword = hints.any { it.contains("password") } ||
-            variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-            variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        val isPassword = hints.any {
+            it.contains("password") || it.contains("newpassword")
+        } ||
+            variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
 
         val isUsername = hints.any {
-            it.contains("username") || it.contains("email") || it.contains("newusername")
+            it.contains("username") || it.contains("email") ||
+                it.contains("user") || it.contains("login")
         } ||
-            entry.contains("username") ||
-            entry.contains("user_name") ||
-            entry.contains("email") ||
-            variation == android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            entry.contains("username") || entry.contains("user_name") ||
+            entry.contains("email") || entry == "login" ||
+            variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
 
-        val isTextInput = inputClass == android.text.InputType.TYPE_CLASS_TEXT ||
+        val isTextInput = inputClass == InputType.TYPE_CLASS_TEXT ||
             className.endsWith("EditText", ignoreCase = true)
-
         val id = node.autofillId
+
         if (id != null) {
             val kind = when {
                 isPassword -> FieldKind.PASSWORD
@@ -222,7 +248,9 @@ class AutoPassAutofillService : AutofillService() {
                         id = id,
                         kind = kind,
                         value = node.autofillValue?.textValue?.toString().orEmpty(),
-                        domain = domain
+                        domain = domain,
+                        focused = node.isFocused,
+                        resourceName = resourceName
                     )
                 )
             }
@@ -249,7 +277,9 @@ class AutoPassAutofillService : AutofillService() {
         val id: AutofillId,
         val kind: FieldKind,
         val value: String,
-        val domain: String?
+        val domain: String?,
+        val focused: Boolean,
+        val resourceName: String
     )
 
     private enum class FieldKind {
