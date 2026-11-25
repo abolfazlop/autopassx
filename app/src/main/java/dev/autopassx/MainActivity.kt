@@ -1,7 +1,6 @@
 package dev.autopassx
 
 import android.app.Activity
-import android.app.AutofillManager
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
@@ -90,7 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshAutofillState() {
-        val selected = Settings.Secure.getString(contentResolver, Settings.Secure.AUTOFILL_SERVICE)
+        val selected = Settings.Secure.getString(contentResolver, "autofill_service")
         val component = ComponentName.unflattenFromString(selected ?: "")
         autofillEnabled = component?.packageName == packageName
     }
