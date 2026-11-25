@@ -67,11 +67,17 @@ class MainActivity : ComponentActivity() {
                         onEnable = ::requestAutofill,
                         onRefresh = ::refreshAutofillState,
                         onLoad = { target -> target.clear(); target.addAll(EncryptedVault(this).all()) },
-                        onSave = { title, pkg, username, password ->
+                        onSave = { title, pkg, domain, username, password ->
+                            val cleanDomain = normalizeWebsiteDomain(domain)
+                            val recordId = if (cleanDomain.isNotBlank()) {
+                                "web:$cleanDomain:$username"
+                            } else {
+                                "app:$pkg:$username"
+                            }
                             EncryptedVault(this).put(
-                                "app:$pkg:$username",
+                                recordId,
                                 JSONObject().put("label", title).put("package", pkg)
-                                    .put("domain", "").put("username", username).put("password", password)
+                                    .put("domain", cleanDomain).put("username", username).put("password", password)
                             )
                         },
                         onDelete = { id -> EncryptedVault(this).delete(id) },
@@ -179,13 +185,20 @@ private fun AutoPassRoot(
     if (showAdd) {
         AddAccountDialog(
             onDismiss = { showAdd = false },
-            onSave = { title, pkg, user, pass ->
-                onSave(title, pkg, user, pass)
+            onSave = { title, pkg, domain, user, pass ->
+                onSave(title, pkg, domain, user, pass)
                 onLoad(records)
                 showAdd = false
             }
         )
     }
+}
+
+@Composable
+private fun normalizeWebsiteDomain(raw: String): String {
+    return raw.trim().lowercase()
+        .removePrefix("https://").removePrefix("http://").removePrefix("www.")
+        .substringBefore('/').substringBefore(':').trimEnd('.')
 }
 
 @Composable
@@ -435,10 +448,11 @@ private fun SettingTile(title: String, detail: String) {
 @Composable
 private fun AddAccountDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String) -> Unit
+    onSave: (String, String, String, String, String) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var pkg by remember { mutableStateOf("") }
+    var domain by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
@@ -455,8 +469,12 @@ private fun AddAccountDialog(
                 OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(),
                     label = { Text("نام سرویس (مثلاً Google)") }, singleLine = true)
                 OutlinedTextField(pkg, { pkg = it }, modifier = Modifier.fillMaxWidth(),
-                    label = { Text("شناسه برنامه / Package") }, singleLine = true,
+                    label = { Text("شناسه برنامه (برای اپلیکیشن)") }, singleLine = true,
                     placeholder = { Text("com.example.app") })
+                OutlinedTextField(domain, { domain = it }, modifier = Modifier.fillMaxWidth(),
+                    label = { Text("دامنه وب‌سایت (اختیاری)") }, singleLine = true,
+                    placeholder = { Text("example.com") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                 OutlinedTextField(username, { username = it }, modifier = Modifier.fillMaxWidth(),
                     label = { Text("نام کاربری یا ایمیل") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
@@ -474,10 +492,17 @@ private fun AddAccountDialog(
         confirmButton = {
             Button(onClick = {
                 when {
-                    pkg.isBlank() || !pkg.contains('.') -> error = "شناسه برنامه معتبر وارد کن"
+                    domain.isBlank() && (pkg.isBlank() || !pkg.contains('.')) -> error = "شناسه برنامه یا دامنه وب‌سایت معتبر وارد کن"
+                    domain.isNotBlank() && !normalizeWebsiteDomain(domain).contains('.') -> error = "دامنه وب‌سایت معتبر وارد کن"
                     username.isBlank() -> error = "نام کاربری را وارد کن"
                     password.isBlank() -> error = "رمز عبور را وارد کن"
-                    else -> onSave(title.ifBlank { pkg }, pkg.trim(), username.trim(), password)
+                    else -> onSave(
+                        title.ifBlank { domain.ifBlank { pkg } },
+                        pkg.trim(),
+                        normalizeWebsiteDomain(domain),
+                        username.trim(),
+                        password
+                    )
                 }
             }) { Text("ذخیره امن") }
         },
